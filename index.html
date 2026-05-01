@@ -1,43 +1,85 @@
 <!DOCTYPE html>
 <html lang="zh-CN">
+
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <title>Excel 数据导入</title>
     <link rel="stylesheet" href="lib/element-plus.css" />
     <style>
-        [v-cloak] { display: none !important; }
-        body { margin: 0; background: #f5f7fa; }
-        #app { max-width: 1400px; margin: 0 auto; padding: 20px; }
-        .toolbar { display: flex; align-items: center; gap: 12px; margin-bottom: 16px; flex-wrap: wrap; }
-        .toolbar .info { color: #909399; font-size: 13px; }
-        .table-wrap { background: #fff; border-radius: 8px; padding: 16px; box-shadow: 0 2px 12px rgba(0,0,0,0.06); }
-        .no-data { text-align: center; padding: 60px 0; color: #c0c4cc; }
-        .no-data .icon { font-size: 48px; margin-bottom: 12px; }
-        .no-data p { margin: 0; font-size: 14px; }
-        .server-badge { font-size: 12px; background: #67c23a; color: #fff; padding: 2px 8px; border-radius: 4px; }
+        [v-cloak] {
+            display: none !important;
+        }
+
+        body {
+            margin: 0;
+            background: #f5f7fa;
+        }
+
+        #app {
+            max-width: 1400px;
+            margin: 0 auto;
+            padding: 20px;
+        }
+
+        .toolbar {
+            display: flex;
+            align-items: center;
+            gap: 12px;
+            margin-bottom: 16px;
+            flex-wrap: wrap;
+        }
+
+        .toolbar .info {
+            color: #909399;
+            font-size: 13px;
+        }
+
+        .table-wrap {
+            background: #fff;
+            border-radius: 8px;
+            padding: 16px;
+            box-shadow: 0 2px 12px rgba(0, 0, 0, 0.06);
+        }
+
+        .no-data {
+            text-align: center;
+            padding: 60px 0;
+            color: #c0c4cc;
+        }
+
+        .no-data .icon {
+            font-size: 48px;
+            margin-bottom: 12px;
+        }
+
+        .no-data p {
+            margin: 0;
+            font-size: 14px;
+        }
+
+        .server-badge {
+            font-size: 12px;
+            background: #67c23a;
+            color: #fff;
+            padding: 2px 8px;
+            border-radius: 4px;
+        }
     </style>
 </head>
+
 <body>
     <div id="app" v-cloak>
         <!-- 工具栏 -->
         <div class="toolbar">
-            <el-upload
-                :auto-upload="false"
-                accept=".xlsx,.xls"
-                :on-change="handleFileChange"
-                :show-file-list="false"
-            >
+            <el-upload :auto-upload="false" accept=".xlsx,.xls" :on-change="handleFileChange" :show-file-list="false">
                 <el-button type="primary">导入 Excel</el-button>
             </el-upload>
+            <el-button @click="showAddDialog" :disabled="!columns.length">新增</el-button>
+            <el-button @click="deleteSelected" :disabled="!selectedRows.length" type="danger">删除选中</el-button>
             <el-button @click="clearData" :disabled="!tableData.length">清空数据</el-button>
-            <el-input
-                v-model="searchQuery"
-                placeholder="模糊搜索."
-                clearable
-                style="width: 280px"
-                prefix-icon="Search"
-            />
+
+            <el-input v-model="searchQuery" placeholder="模糊搜索." clearable style="width: 280px" prefix-icon="Search" />
             <span class="info">
                 {{ filteredData.length }} / {{ tableData.length }} 条记录
                 <template v-if="sheetName">（{{ sheetName }}）</template>
@@ -52,41 +94,39 @@
                 <p>导入 Excel，数据将自动保存到项目目录 data.json</p>
             </div>
             <template v-if="tableData.length > 0">
-                <el-table
-                    :data="pageData"
-                    border
-                    stripe
-                    max-height="650"
-                    style="width: 100%"
-                >
-                    <el-table-column
-                        v-for="col in columns"
-                        :key="col.prop"
-                        :prop="col.prop"
-                        :label="col.label"
-                        min-width="120"
-                        show-overflow-tooltip
-                    />
+                <el-table ref="multipleTableRef" :data="pageData" border :max-height="tableHeight" style="width: 100%"
+                    :row-key="getRowKey">
+                    <!-- <el-table-column type="selection" width="55" reserve-selection /> -->
+                    <el-table-column v-for="col in columns.filter(item => item.prop !== 'id')" :key="col.prop"
+                        :prop="col.prop" :label="col.label" min-width="120" show-overflow-tooltip />
                 </el-table>
                 <div style="display: flex; justify-content: center; margin-top: 16px;">
-                    <el-pagination
-                        v-model:page-size="pageSize"
-                        v-model:current-page="currentPage"
-                        :total="filteredData.length"
-                        :page-sizes="[20, 50, 100, 200]"
-                        layout="total, sizes, prev, pager, next, jumper"
-                        background
-                    />
+                    <el-pagination v-model:page-size="pageSize" v-model:current-page="currentPage"
+                        :total="filteredData.length" :page-sizes="[20, 50, 100, 200]"
+                        layout="total, sizes, prev, pager, next, jumper" background />
                 </div>
             </template>
         </div>
-    </div>
 
+        <!-- 手动新增对话框 -->
+        <el-dialog v-model="addDialogVisible" title="手动新增" width="500px" :close-on-click-modal="false">
+            <el-form ref="addFormRef" :model="addForm" label-width="100px">
+                <el-form-item v-for="col in columns.filter(item => item.prop !== 'id')" :key="col.prop"
+                    :label="col.label">
+                    <el-input v-model="addForm[col.prop]" :placeholder="'请输入 ' + col.label" clearable />
+                </el-form-item>
+            </el-form>
+            <template #footer>
+                <el-button @click="addDialogVisible = false">取消</el-button>
+                <el-button type="primary" @click="confirmAdd">确定</el-button>
+            </template>
+        </el-dialog>
+    </div>
     <script src="lib/vue.global.prod.js"></script>
     <script src="lib/element-plus.umd.js"></script>
     <script src="lib/xlsx.full.min.js"></script>
     <script>
-        const { createApp, ref, computed, onMounted } = Vue;
+        const { createApp, ref, computed, onMounted, watch } = Vue;
 
         const STORAGE_KEY = 'excel_import_data';
         const PAGE_SIZE_KEY = 'excel_page_size';
@@ -111,10 +151,24 @@
                 const sheetName = ref('');
                 const searchQuery = ref('');
                 const isServerMode = ref(false);
+                const addDialogVisible = ref(false);
+                const addForm = ref({});
+                const addFormRef = ref(null);
+                const multipleTableRef = ref(null);
+                const selectedRows = ref([]);
+                const onSelectionChange = (rows) => { selectedRows.value = rows; };
+                const getNextId = () => {
+                    const maxId = tableData.value.reduce((max, r) => Math.max(max, Number(r.id) || 0), 0);
+                    return maxId + 1;
+                };
+                const getRowKey = (row) => row.id;
 
                 const currentPage = ref(1);
                 const pageSize = ref(Number(localStorage.getItem(PAGE_SIZE_KEY)) || 50);
-
+                const tableHeight = computed(() => {
+                    const res = window.innerHeight - 180
+                    return res > 300 ? res : 300;
+                });
                 const filteredData = computed(() => {
                     const q = searchQuery.value.trim().toLowerCase();
                     if (!q) return tableData.value;
@@ -124,7 +178,6 @@
                         )
                     );
                 });
-
                 const pageData = computed(() => {
                     const start = (currentPage.value - 1) * pageSize.value;
                     return filteredData.value.slice(start, start + pageSize.value);
@@ -132,7 +185,6 @@
 
                 function resetPage() { currentPage.value = 1; }
 
-                const { watch } = Vue;
                 watch(pageSize, (val) => {
                     localStorage.setItem(PAGE_SIZE_KEY, val);
                     resetPage();
@@ -222,9 +274,28 @@
                     }
                 });
                 // -------- 事件处理 --------
-                const handleFileChange = (uploadFile) => {
+                const handleFileChange = async (uploadFile) => {
                     const file = uploadFile.raw;
                     if (!file) return;
+
+                    // 存在数据时询问追加或替换
+                    let mode = 'replace';
+                    if (tableData.value.length > 0) {
+                        try {
+                            const action = await ElementPlus.ElMessageBox.confirm(
+                                '当前已有数据，请选择导入方式：',
+                                '导入确认',
+                                {
+                                    confirmButtonText: '追加',
+                                    cancelButtonText: '替换',
+                                    type: 'info',
+                                }
+                            );
+                            mode = 'append';
+                        } catch {
+                            mode = 'replace';
+                        }
+                    }
 
                     const reader = new FileReader();
                     reader.onload = async (e) => {
@@ -240,17 +311,36 @@
                                 return;
                             }
 
-                            columns.value = Object.keys(jsonData[0]).map(k => ({ prop: k, label: k }));
-                            tableData.value = jsonData;
-                            sheetName.value = name;
+                            let addedCount = jsonData.length;
+                            if (mode === 'append') {
+                                const existing = tableData.value;
+                                const newRows = jsonData.filter(row =>
+                                    !existing.some(ex =>
+                                        Object.keys(row).every(k => row[k] === ex[k])
+                                    )
+                                );
+                                addedCount = newRows.length;
+                                if (addedCount === 0) {
+                                    ElementPlus.ElMessage.info('所有数据均已存在，无需追加');
+                                    return;
+                                }
+                                let nextId = getNextId();
+                                const newRowsWithId = newRows.map(row => ({ ...row, id: nextId++ }));
+                                tableData.value = [...existing, ...newRowsWithId];
+                            } else {
+                                columns.value = [{ prop: 'id', label: 'ID' }, ...Object.keys(jsonData[0]).map(k => ({ prop: k, label: k }))];
+                                const dataWithId = jsonData.map((row, idx) => ({ ...row, id: idx + 1 }));
+                                tableData.value = dataWithId;
+                                sheetName.value = name;
+                            }
                             resetPage();
 
                             // 保存到服务端（自动写入项目目录 data.json）
-                            await saveToServer(jsonData, name);
+                            await saveToServer(tableData.value, sheetName.value || name);
                             // 同时保存到 localStorage 作为备份
-                            saveToStorage(jsonData, name);
+                            saveToStorage(tableData.value, sheetName.value || name);
 
-                            ElementPlus.ElMessage.success(`成功导入 ${jsonData.length} 条记录`);
+                            ElementPlus.ElMessage.success(`成功导入 ${addedCount} 条记录`);
                         } catch (err) {
                             ElementPlus.ElMessage.error('文件解析失败：' + err.message);
                         }
@@ -258,7 +348,47 @@
                     reader.readAsArrayBuffer(file);
                 };
 
-                const clearData = () => {
+                const showAddDialog = () => {
+                    const form = {};
+                    columns.value.forEach(col => { if (col.prop !== 'id') form[col.prop] = ''; });
+                    addForm.value = form;
+                    addDialogVisible.value = true;
+                };
+
+                const confirmAdd = async () => {
+                    const hasValue = Object.values(addForm.value).some(v => v !== '' && v !== null && v !== undefined);
+                    if (!hasValue) {
+                        ElementPlus.ElMessage.warning('请至少填写一个字段');
+                        return;
+                    }
+                    tableData.value = [{ id: getNextId(), ...addForm.value }, ...tableData.value];
+                    addDialogVisible.value = false;
+                    resetPage();
+
+                    await saveToServer(tableData.value, sheetName.value);
+                    saveToStorage(tableData.value, sheetName.value);
+                    ElementPlus.ElMessage.success('已新增 1 条记录');
+                };
+
+                const deleteSelected = async () => {
+                    const ids = new Set(selectedRows.value.map(r => r.id));
+                    tableData.value = tableData.value.filter(r => !ids.has(r.id));
+                    selectedRows.value = [];
+                    await saveToServer(tableData.value, sheetName.value);
+                    saveToStorage(tableData.value, sheetName.value);
+                    ElementPlus.ElMessage.success('已删除选中数据');
+                };
+
+                const clearData = async () => {
+                    try {
+                        await ElementPlus.ElMessageBox.confirm(
+                            '确定要全部清空数据吗？此操作不可恢复。',
+                            '清空数据',
+                            { confirmButtonText: '确定', cancelButtonText: '取消', type: 'warning' }
+                        );
+                    } catch {
+                        return;
+                    }
                     tableData.value = [];
                     columns.value = [];
                     sheetName.value = '';
@@ -269,7 +399,7 @@
                     ElementPlus.ElMessage.info('数据已清空');
                 };
 
-                return { tableData, columns, sheetName, searchQuery, filteredData, pageData, currentPage, pageSize, isServerMode, handleFileChange, clearData };
+                return { tableData, columns, sheetName, searchQuery, filteredData, pageData, currentPage, pageSize, isServerMode, tableHeight, handleFileChange, clearData, addDialogVisible, addForm, addFormRef, showAddDialog, confirmAdd, multipleTableRef, selectedRows, onSelectionChange, deleteSelected, getRowKey };
             }
         });
 
@@ -277,4 +407,5 @@
         app.mount('#app');
     </script>
 </body>
+
 </html>
