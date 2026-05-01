@@ -17,7 +17,6 @@
         }
 
         #app {
-            max-width: 1400px;
             margin: 0 auto;
             padding: 20px;
         }
@@ -78,8 +77,10 @@
             <el-button @click="showAddDialog" :disabled="!columns.length">新增</el-button>
             <el-button @click="deleteSelected" :disabled="!selectedRows.length" type="danger">删除选中</el-button>
             <el-button @click="clearData" :disabled="!tableData.length">清空数据</el-button>
-
-            <el-input v-model="searchQuery" placeholder="模糊搜索." clearable style="width: 280px" prefix-icon="Search" />
+        </div>
+        <div class="toolbar">
+            <el-input v-model="searchQuery" placeholder="搜索你想要的内容" clearable style="flex:1;height:42px"
+                prefix-icon="Search" />
             <span class="info">
                 {{ filteredData.length }} / {{ tableData.length }} 条记录
                 <template v-if="sheetName">（{{ sheetName }}）</template>
@@ -98,7 +99,11 @@
                     :row-key="getRowKey">
                     <!-- <el-table-column type="selection" width="55" reserve-selection /> -->
                     <el-table-column v-for="col in columns.filter(item => item.prop !== 'id')" :key="col.prop"
-                        :prop="col.prop" :label="col.label" min-width="120" show-overflow-tooltip />
+                        :prop="col.prop" :label="col.label" min-width="120" show-overflow-tooltip>
+                        <template #default="{ row }">
+                            <span v-html="highlightText(row[col.prop])" />
+                        </template>
+                    </el-table-column>
                 </el-table>
                 <div style="display: flex; justify-content: center; margin-top: 16px;">
                     <el-pagination v-model:page-size="pageSize" v-model:current-page="currentPage"
@@ -162,11 +167,22 @@
                     return maxId + 1;
                 };
                 const getRowKey = (row) => row.id;
+                const highlightText = (text) => {
+                    const q = searchQuery.value.trim();
+                    if (!q || text === null || text === undefined) return escapeHtml(String(text ?? ''));
+                    const str = String(text);
+                    const idx = str.toLowerCase().indexOf(q.toLowerCase());
+                    if (idx === -1) return escapeHtml(str);
+                    return escapeHtml(str.slice(0, idx)) + '<span style="background:#ffd54f;padding:0 2px">' + escapeHtml(str.slice(idx, idx + q.length)) + '</span>' + escapeHtml(str.slice(idx + q.length));
+                };
+                function escapeHtml(s) {
+                    return s.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;');
+                }
 
                 const currentPage = ref(1);
                 const pageSize = ref(Number(localStorage.getItem(PAGE_SIZE_KEY)) || 50);
                 const tableHeight = computed(() => {
-                    const res = window.innerHeight - 180
+                    const res = window.innerHeight - 230
                     return res > 300 ? res : 300;
                 });
                 const filteredData = computed(() => {
@@ -399,7 +415,7 @@
                     ElementPlus.ElMessage.info('数据已清空');
                 };
 
-                return { tableData, columns, sheetName, searchQuery, filteredData, pageData, currentPage, pageSize, isServerMode, tableHeight, handleFileChange, clearData, addDialogVisible, addForm, addFormRef, showAddDialog, confirmAdd, multipleTableRef, selectedRows, onSelectionChange, deleteSelected, getRowKey };
+                return { tableData, columns, sheetName, searchQuery, filteredData, pageData, currentPage, pageSize, isServerMode, tableHeight, handleFileChange, clearData, addDialogVisible, addForm, addFormRef, showAddDialog, confirmAdd, multipleTableRef, selectedRows, onSelectionChange, deleteSelected, getRowKey, highlightText };
             }
         });
 
