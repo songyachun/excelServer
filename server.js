@@ -48,8 +48,16 @@ const server = http.createServer(async (req, res) => {
     const pathname = url.pathname;
 
     try {
-        // API: 保存 JSON 数据
+        // API: 保存 JSON 数据（保存前自动备份旧数据）
         if (pathname === '/api/save' && req.method === 'POST') {
+            // 先备份旧数据
+            if (fs.existsSync(DATA_FILE)) {
+                const backupDir = path.join(DATA_DIR, 'backup');
+                if (!fs.existsSync(backupDir)) fs.mkdirSync(backupDir, { recursive: true });
+                const ts = new Date().toISOString().replace(/[:.]/g, '-');
+                const backupFile = path.join(backupDir, `data_${ts}.json`);
+                fs.copyFileSync(DATA_FILE, backupFile);
+            }
             const body = await parseBody(req);
             fs.writeFileSync(DATA_FILE, JSON.stringify(body, null, 2), 'utf-8');
             res.writeHead(200, { 'Content-Type': 'application/json' });
@@ -67,9 +75,16 @@ const server = http.createServer(async (req, res) => {
             return res.end(JSON.stringify({ error: 'No data' }));
         }
 
-        // API: 清空数据
+        // API: 清空数据（清空前自动备份）
         if (pathname === '/api/data' && req.method === 'DELETE') {
-            if (fs.existsSync(DATA_FILE)) fs.unlinkSync(DATA_FILE);
+            if (fs.existsSync(DATA_FILE)) {
+                const backupDir = path.join(DATA_DIR, 'backup');
+                if (!fs.existsSync(backupDir)) fs.mkdirSync(backupDir, { recursive: true });
+                const ts = new Date().toISOString().replace(/[:.]/g, '-');
+                const backupFile = path.join(backupDir, `data_${ts}.json`);
+                fs.copyFileSync(DATA_FILE, backupFile);
+                fs.unlinkSync(DATA_FILE);
+            }
             res.writeHead(200, { 'Content-Type': 'application/json' });
             return res.end(JSON.stringify({ ok: true }));
         }
