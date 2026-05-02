@@ -6,69 +6,31 @@
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <title>广谱抗病毒化合物库·本地查询系统</title>
     <link rel="stylesheet" href="lib/element-plus.css" />
-    <style>
-        [v-cloak] {
-            display: none !important;
-        }
-
-        body {
-            margin: 0;
-            background: #f5f7fa;
-        }
-
-        #app {
-            margin: 0 auto;
-            padding: 20px;
-        }
-
-        .toolbar {
-            display: flex;
-            align-items: center;
-            gap: 12px;
-            margin-bottom: 16px;
-            flex-wrap: wrap;
-        }
-
-        .toolbar .info {
-            color: #909399;
-            font-size: 13px;
-        }
-
-        .table-wrap {
-            background: #fff;
-            border-radius: 8px;
-            padding: 16px;
-            box-shadow: 0 2px 12px rgba(0, 0, 0, 0.06);
-        }
-
-        .no-data {
-            text-align: center;
-            padding: 60px 0;
-            color: #c0c4cc;
-        }
-
-        .no-data .icon {
-            font-size: 48px;
-            margin-bottom: 12px;
-        }
-
-        .no-data p {
-            margin: 0;
-            font-size: 14px;
-        }
-
-        .server-badge {
-            font-size: 12px;
-            background: #67c23a;
-            color: #fff;
-            padding: 2px 8px;
-            border-radius: 4px;
-        }
-    </style>
+    <link rel="stylesheet" href="style.css" />
 </head>
 
 <body>
     <div id="app" v-cloak>
+        <!-- 页面标题 -->
+        <div class="page-header">
+            <div class="icon">🧬</div>
+            <h1>广谱抗病毒化合物库·本地查询系统</h1>
+            <div class="header-right">
+                <span class="sub">Local Compound Database</span>
+                <div class="theme-btn" @click="toggleThemePanel" ref="themeBtnRef">
+                    <span v-html="themeIcon"></span>
+                    <div class="theme-tooltip" :class="{ open: themePanelOpen }" @click.stop>
+                        <div v-for="t in themes" :key="t.id"
+                            class="theme-tooltip-item"
+                            :class="{ active: currentTheme === t.id }"
+                            @click="setTheme(t.id)"
+                            :title="t.name"
+                            v-html="t.icon">
+                        </div>
+                    </div>
+                </div>
+            </div>
+        </div>
         <!-- 工具栏 -->
         <div class="toolbar">
             <el-upload :auto-upload="false" accept=".xlsx,.xls" :on-change="handleFileChange" :show-file-list="false">
@@ -77,6 +39,7 @@
             <el-button @click="showAddDialog" :disabled="!columns.length">新增</el-button>
             <el-button @click="deleteSelected" :disabled="!selectedRows.length" type="danger">删除选中</el-button>
             <el-button @click="clearData" :disabled="!tableData.length">清空数据</el-button>
+            <el-button @click="logDialogVisible = true" :disabled="!logs.length" style="margin-left:auto">操作日志</el-button>
         </div>
         <div class="toolbar">
             <el-input v-model="searchQuery" placeholder="搜索你想要的内容" clearable style="flex:1;height:42px"
@@ -114,8 +77,8 @@
         </div>
 
         <!-- 手动新增对话框 -->
-        <el-dialog v-model="addDialogVisible" title="手动新增" width="500px" :close-on-click-modal="false">
-            <el-form ref="addFormRef" :model="addForm" label-width="100px">
+        <el-dialog v-model="addDialogVisible" title="手动新增" width="min(90vw, 800px)" :close-on-click-modal="false">
+            <el-form ref="addFormRef" :model="addForm" label-width="100px" class="grid-form">
                 <el-form-item v-for="col in columns.filter(item => item.prop !== 'id')" :key="col.prop"
                     :label="col.label">
                     <el-input v-model="addForm[col.prop]" :placeholder="'请输入 ' + col.label" clearable />
@@ -126,302 +89,25 @@
                 <el-button type="primary" @click="confirmAdd">确定</el-button>
             </template>
         </el-dialog>
+
+        <!-- 操作日志对话框 -->
+        <el-dialog v-model="logDialogVisible" title="操作日志" width="700px">
+            <el-table :data="logs" max-height="460" size="small" border>
+                <el-table-column prop="time" label="时间" width="160" />
+                <el-table-column prop="action" label="操作" width="100" />
+                <el-table-column prop="detail" label="详情" min-width="200" />
+                <el-table-column label="数据变化" width="130">
+                    <template #default="{ row }">
+                        {{ row.beforeCount }} → {{ row.afterCount }} 条
+                    </template>
+                </el-table-column>
+            </el-table>
+        </el-dialog>
     </div>
     <script src="lib/vue.global.prod.js"></script>
     <script src="lib/element-plus.umd.js"></script>
     <script src="lib/xlsx.full.min.js"></script>
-    <script>
-        const { createApp, ref, computed, onMounted, watch } = Vue;
-
-        const STORAGE_KEY = 'excel_import_data';
-        const PAGE_SIZE_KEY = 'excel_page_size';
-
-        // 从 localStorage 读取
-        function loadFromStorage() {
-            try {
-                const raw = localStorage.getItem(STORAGE_KEY);
-                return raw ? JSON.parse(raw) : null;
-            } catch { return null; }
-        }
-
-        // 保存到 localStorage
-        function saveToStorage(data, sheetName) {
-            localStorage.setItem(STORAGE_KEY, JSON.stringify({ data, sheetName, savedAt: Date.now() }));
-        }
-
-        const app = createApp({
-            setup() {
-                const tableData = ref([]);
-                const columns = ref([]);
-                const sheetName = ref('');
-                const searchQuery = ref('');
-                const isServerMode = ref(false);
-                const addDialogVisible = ref(false);
-                const addForm = ref({});
-                const addFormRef = ref(null);
-                const multipleTableRef = ref(null);
-                const selectedRows = ref([]);
-                const onSelectionChange = (rows) => { selectedRows.value = rows; };
-                const getNextId = () => {
-                    const maxId = tableData.value.reduce((max, r) => Math.max(max, Number(r.id) || 0), 0);
-                    return maxId + 1;
-                };
-                const getRowKey = (row) => row.id;
-                const highlightText = (text) => {
-                    const q = searchQuery.value.trim();
-                    if (!q || text === null || text === undefined) return escapeHtml(String(text ?? ''));
-                    const str = String(text);
-                    const idx = str.toLowerCase().indexOf(q.toLowerCase());
-                    if (idx === -1) return escapeHtml(str);
-                    return escapeHtml(str.slice(0, idx)) + '<span style="background:#ffd54f;padding:0 2px">' + escapeHtml(str.slice(idx, idx + q.length)) + '</span>' + escapeHtml(str.slice(idx + q.length));
-                };
-                function escapeHtml(s) {
-                    return s.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;');
-                }
-
-                const currentPage = ref(1);
-                const pageSize = ref(Number(localStorage.getItem(PAGE_SIZE_KEY)) || 50);
-                const tableHeight = computed(() => {
-                    const res = window.innerHeight - 230
-                    return res > 300 ? res : 300;
-                });
-                const filteredData = computed(() => {
-                    const q = searchQuery.value.trim().toLowerCase();
-                    if (!q) return tableData.value;
-                    return tableData.value.filter(row =>
-                        Object.values(row).some(val =>
-                            val !== null && val !== undefined && String(val).toLowerCase().includes(q)
-                        )
-                    );
-                });
-                const pageData = computed(() => {
-                    const start = (currentPage.value - 1) * pageSize.value;
-                    return filteredData.value.slice(start, start + pageSize.value);
-                });
-
-                function resetPage() { currentPage.value = 1; }
-
-                watch(pageSize, (val) => {
-                    localStorage.setItem(PAGE_SIZE_KEY, val);
-                    resetPage();
-                });
-                watch(searchQuery, () => { resetPage(); });
-
-                // -------- 解析 Excel --------
-                function parseExcel(worksheet) {
-                    const rows = XLSX.utils.sheet_to_json(worksheet, { header: 1 });
-                    let headerIdx = -1, maxCols = 0;
-                    for (let i = 0; i < rows.length; i++) {
-                        const r = rows[i];
-                        if (!r) continue;
-                        const count = r.filter(c => c !== null && c !== undefined && c !== '').length;
-                        if (count > maxCols) { maxCols = count; headerIdx = i; }
-                    }
-                    if (headerIdx === -1) return [];
-
-                    const headers = rows[headerIdx];
-                    const result = [];
-                    for (let i = headerIdx + 1; i < rows.length; i++) {
-                        const r = rows[i];
-                        if (!r || r.every(c => c === null || c === undefined || c === '')) continue;
-                        if (r.length <= 2 && typeof r[0] === 'string' && r[0].startsWith('#')) continue;
-                        const obj = {};
-                        headers.forEach((h, idx) => {
-                            if (h !== null && h !== undefined && h !== '') {
-                                obj[h] = idx < r.length ? r[idx] : null;
-                            }
-                        });
-                        result.push(obj);
-                    }
-                    return result;
-                }
-
-                // -------- 服务端 API --------
-                async function tryLoadFromServer() {
-                    try {
-                        const res = await fetch('/api/data');
-                        if (!res.ok) return false;
-                        const payload = await res.json();
-                        const data = payload.data || payload;
-                        if (!Array.isArray(data) || data.length === 0) return false;
-                        columns.value = Object.keys(data[0]).map(k => ({ prop: k, label: k }));
-                        tableData.value = data;
-                        sheetName.value = payload.sheetName || 'data';
-                        isServerMode.value = true;
-                        return true;
-                    } catch { return false; }
-                }
-
-                async function saveToServer(data, name) {
-                    try {
-                        const payload = {
-                            sheetName: name,
-                            exportedAt: new Date().toISOString(),
-                            total: data.length,
-                            data: data
-                        };
-                        const res = await fetch('/api/save', {
-                            method: 'POST',
-                            headers: { 'Content-Type': 'application/json' },
-                            body: JSON.stringify(payload)
-                        });
-                        if (res.ok) isServerMode.value = true;
-                    } catch { /* 服务端不可用，忽略 */ }
-                }
-
-                async function clearServerData() {
-                    try {
-                        await fetch('/api/data', { method: 'DELETE' });
-                    } catch { /* 忽略 */ }
-                }
-
-                // -------- 初始化 --------
-                onMounted(async () => {
-                    // 优先从服务端加载（启动时自动读 data.json）
-                    const loaded = await tryLoadFromServer();
-                    if (!loaded) {
-                        // 回退到 localStorage
-                        const stored = loadFromStorage();
-                        if (stored && stored.data && stored.data.length) {
-                            columns.value = Object.keys(stored.data[0]).map(k => ({ prop: k, label: k }));
-                            tableData.value = stored.data;
-                            sheetName.value = stored.sheetName || '';
-                        }
-                    }
-                });
-                // -------- 事件处理 --------
-                const handleFileChange = async (uploadFile) => {
-                    const file = uploadFile.raw;
-                    if (!file) return;
-
-                    // 存在数据时询问追加或替换
-                    let mode = 'replace';
-                    if (tableData.value.length > 0) {
-                        try {
-                            const action = await ElementPlus.ElMessageBox.confirm(
-                                '当前已有数据，请选择导入方式：',
-                                '导入确认',
-                                {
-                                    confirmButtonText: '追加',
-                                    cancelButtonText: '替换',
-                                    type: 'info',
-                                }
-                            );
-                            mode = 'append';
-                        } catch {
-                            mode = 'replace';
-                        }
-                    }
-
-                    const reader = new FileReader();
-                    reader.onload = async (e) => {
-                        try {
-                            const data = new Uint8Array(e.target.result);
-                            const workbook = XLSX.read(data, { type: 'array' });
-                            const name = workbook.SheetNames[0];
-                            const worksheet = workbook.Sheets[name];
-                            const jsonData = parseExcel(worksheet);
-
-                            if (jsonData.length === 0) {
-                                ElementPlus.ElMessage.warning('未识别到有效数据');
-                                return;
-                            }
-
-                            let addedCount = jsonData.length;
-                            if (mode === 'append') {
-                                const existing = tableData.value;
-                                const newRows = jsonData.filter(row =>
-                                    !existing.some(ex =>
-                                        Object.keys(row).every(k => row[k] === ex[k])
-                                    )
-                                );
-                                addedCount = newRows.length;
-                                if (addedCount === 0) {
-                                    ElementPlus.ElMessage.info('所有数据均已存在，无需追加');
-                                    return;
-                                }
-                                let nextId = getNextId();
-                                const newRowsWithId = newRows.map(row => ({ ...row, id: nextId++ }));
-                                tableData.value = [...existing, ...newRowsWithId];
-                            } else {
-                                columns.value = [{ prop: 'id', label: 'ID' }, ...Object.keys(jsonData[0]).map(k => ({ prop: k, label: k }))];
-                                const dataWithId = jsonData.map((row, idx) => ({ ...row, id: idx + 1 }));
-                                tableData.value = dataWithId;
-                                sheetName.value = name;
-                            }
-                            resetPage();
-
-                            // 保存到服务端（自动写入项目目录 data.json）
-                            await saveToServer(tableData.value, sheetName.value || name);
-                            // 同时保存到 localStorage 作为备份
-                            saveToStorage(tableData.value, sheetName.value || name);
-
-                            ElementPlus.ElMessage.success(`成功导入 ${addedCount} 条记录`);
-                        } catch (err) {
-                            ElementPlus.ElMessage.error('文件解析失败：' + err.message);
-                        }
-                    };
-                    reader.readAsArrayBuffer(file);
-                };
-
-                const showAddDialog = () => {
-                    const form = {};
-                    columns.value.forEach(col => { if (col.prop !== 'id') form[col.prop] = ''; });
-                    addForm.value = form;
-                    addDialogVisible.value = true;
-                };
-
-                const confirmAdd = async () => {
-                    const hasValue = Object.values(addForm.value).some(v => v !== '' && v !== null && v !== undefined);
-                    if (!hasValue) {
-                        ElementPlus.ElMessage.warning('请至少填写一个字段');
-                        return;
-                    }
-                    tableData.value = [{ id: getNextId(), ...addForm.value }, ...tableData.value];
-                    addDialogVisible.value = false;
-                    resetPage();
-
-                    await saveToServer(tableData.value, sheetName.value);
-                    saveToStorage(tableData.value, sheetName.value);
-                    ElementPlus.ElMessage.success('已新增 1 条记录');
-                };
-
-                const deleteSelected = async () => {
-                    const ids = new Set(selectedRows.value.map(r => r.id));
-                    tableData.value = tableData.value.filter(r => !ids.has(r.id));
-                    selectedRows.value = [];
-                    await saveToServer(tableData.value, sheetName.value);
-                    saveToStorage(tableData.value, sheetName.value);
-                    ElementPlus.ElMessage.success('已删除选中数据');
-                };
-
-                const clearData = async () => {
-                    try {
-                        await ElementPlus.ElMessageBox.confirm(
-                            '确定要全部清空数据吗？此操作不可恢复。',
-                            '清空数据',
-                            { confirmButtonText: '确定', cancelButtonText: '取消', type: 'warning' }
-                        );
-                    } catch {
-                        return;
-                    }
-                    tableData.value = [];
-                    columns.value = [];
-                    sheetName.value = '';
-                    searchQuery.value = '';
-                    localStorage.removeItem(STORAGE_KEY);
-                    clearServerData();
-                    resetPage();
-                    ElementPlus.ElMessage.info('数据已清空');
-                };
-
-                return { tableData, columns, sheetName, searchQuery, filteredData, pageData, currentPage, pageSize, isServerMode, tableHeight, handleFileChange, clearData, addDialogVisible, addForm, addFormRef, showAddDialog, confirmAdd, multipleTableRef, selectedRows, onSelectionChange, deleteSelected, getRowKey, highlightText };
-            }
-        });
-
-        app.use(ElementPlus);
-        app.mount('#app');
-    </script>
+    <script src="app.js"></script>
 </body>
 
 </html>

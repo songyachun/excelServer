@@ -2,3 +2,4 @@ settings.local.json
 .history
 .idea
 data
+.vscode/launch.json
