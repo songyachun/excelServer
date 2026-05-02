@@ -80,7 +80,7 @@ const app = createApp({
             const str = String(text);
             const idx = str.toLowerCase().indexOf(q.toLowerCase());
             if (idx === -1) return escapeHtml(str);
-            return escapeHtml(str.slice(0, idx)) + '<span style="background:#ffd54f;padding:0 2px">' + escapeHtml(str.slice(idx, idx + q.length)) + '</span>' + escapeHtml(str.slice(idx + q.length));
+            return escapeHtml(str.slice(0, idx)) + '<span style="background:#ffd54f;color:#1a1a1a;padding:0 2px;border-radius:2px">' + escapeHtml(str.slice(idx, idx + q.length)) + '</span>' + escapeHtml(str.slice(idx + q.length));
         };
         function escapeHtml(s) {
             return s.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;');
@@ -89,7 +89,7 @@ const app = createApp({
         const currentPage = ref(1);
         const pageSize = ref(Number(localStorage.getItem(PAGE_SIZE_KEY)) || 50);
         const tableHeight = computed(() => {
-            const res = window.innerHeight - 230
+            const res = window.innerHeight - 330
             return res > 300 ? res : 300;
         });
         const filteredData = computed(() => {
