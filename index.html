@@ -5,7 +5,6 @@
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <title>广谱抗病毒化合物库·本地查询系统</title>
-    <link rel="stylesheet" href="lib/element-plus.css" />
     <link rel="stylesheet" href="style.css" />
 </head>
 
@@ -31,19 +30,23 @@
                 </div>
             </div>
         </div>
+
         <!-- 工具栏 -->
         <div class="toolbar">
-            <el-upload :auto-upload="false" accept=".xlsx,.xls" :on-change="handleFileChange" :show-file-list="false">
-                <el-button type="primary">导入 Excel</el-button>
-            </el-upload>
-            <el-button @click="showAddDialog" :disabled="!columns.length">新增</el-button>
-            <el-button @click="deleteSelected" :disabled="!selectedRows.length" type="danger">删除选中</el-button>
-            <el-button @click="clearData" :disabled="!tableData.length">清空数据</el-button>
-            <el-button @click="logDialogVisible = true" :disabled="!logs.length" style="margin-left:auto">操作日志</el-button>
+            <button class="btn btn-primary" @click="$refs.fileInput.click()">导入 Excel</button>
+            <input type="file" ref="fileInput" accept=".xlsx,.xls" @change="handleFileInput" class="upload-hidden" />
+            <button class="btn btn-default" @click="showAddDialog" :disabled="!columns.length">新增</button>
+            <button class="btn btn-danger" @click="deleteSelected" :disabled="!selectedRowIds.size">删除选中</button>
+            <button class="btn btn-default" @click="clearData" :disabled="!tableData.length">清空数据</button>
+            <button class="btn btn-default" @click="logDialogVisible = true" :disabled="!logs.length"
+                style="margin-left:auto">操作日志</button>
         </div>
+
         <div class="toolbar">
-            <el-input v-model="searchQuery" placeholder="搜索你想要的内容" clearable style="flex:1;height:42px"
-                prefix-icon="Search" />
+            <div class="search-wrap">
+                <span class="search-icon">🔍</span>
+                <input v-model="searchQuery" type="text" placeholder="搜索你想要的内容" />
+            </div>
             <span class="info">
                 {{ filteredData.length }} / {{ tableData.length }} 条记录
                 <template v-if="sheetName">（{{ sheetName }}）</template>
@@ -58,54 +61,124 @@
                 <p>导入 Excel，数据将自动保存到项目目录 data.json</p>
             </div>
             <template v-if="tableData.length > 0">
-                <el-table ref="multipleTableRef" :data="pageData" border :max-height="tableHeight" style="width: 100%"
-                    :row-key="getRowKey">
-                    <!-- <el-table-column type="selection" width="55" reserve-selection /> -->
-                    <el-table-column v-for="col in columns.filter(item => item.prop !== 'id')" :key="col.prop"
-                        :prop="col.prop" :label="col.label" min-width="120" show-overflow-tooltip>
-                        <template #default="{ row }">
-                            <span v-html="highlightText(row[col.prop])" />
-                        </template>
-                    </el-table-column>
-                </el-table>
-                <div style="display: flex; justify-content: center; margin-top: 16px;">
-                    <el-pagination v-model:page-size="pageSize" v-model:current-page="currentPage"
-                        :total="filteredData.length" :page-sizes="[20, 50, 100, 200]"
-                        layout="total, sizes, prev, pager, next, jumper" background />
+                <div class="table-scroll" :style="{ maxHeight: tableHeight + 'px' }">
+                    <table class="native-table">
+                        <colgroup>
+                            <col style="width:55px">
+                            <col v-for="col in columns.filter(item => item.prop !== 'id')" :key="'col-' + col.prop"
+                                :style="colWidthStyle(col.prop)">
+                        </colgroup>
+                        <thead>
+                            <tr>
+                                <th class="chk-cell">
+                                    <input type="checkbox" :checked="isAllSelected"
+                                        v-indeterminate="isIndeterminate" @change="toggleAllSelection" />
+                                </th>
+                                <th v-for="col in columns.filter(item => item.prop !== 'id')" :key="'th-' + col.prop"
+                                    :style="colWidthStyle(col.prop)">
+                                    {{ col.label }}
+                                    <span class="resize-handle" @mousedown="startResize($event, col.prop)"></span>
+                                </th>
+                            </tr>
+                        </thead>
+                        <tbody>
+                            <tr v-for="row in pageData" :key="row.id">
+                                <td class="chk-cell">
+                                    <input type="checkbox" :checked="selectedRowIds.has(row.id)"
+                                        @change="toggleRowSelection(row)" />
+                                </td>
+                                <td v-for="col in columns.filter(item => item.prop !== 'id')" :key="'td-' + row.id + '-' + col.prop"
+                                    :style="colWidthStyle(col.prop)"
+                                    @mouseenter="handleCellEnter($event, row, col)" @mouseleave="handleCellLeave">
+                                    <span v-html="highlightText(row[col.prop])" />
+                                </td>
+                            </tr>
+                        </tbody>
+                    </table>
+                </div>
+
+                <!-- 分页 -->
+                <div class="pagination">
+                    <span class="page-info">共 {{ filteredData.length }} 条</span>
+                    <button class="page-btn" :disabled="currentPage <= 1" @click="goPage(currentPage - 1)">‹</button>
+                    <template v-for="(p, i) in pageRange()" :key="'pg-' + i">
+                        <span v-if="p === '...'" style="color:var(--pagination-text);padding:0 4px">…</span>
+                        <button v-else class="page-btn" :class="{ active: p === currentPage }" @click="goPage(p)">{{ p }}</button>
+                    </template>
+                    <button class="page-btn" :disabled="currentPage >= totalPages" @click="goPage(currentPage + 1)">›</button>
+                    <select class="page-size-select" v-model.number="pageSize">
+                        <option :value="20">20 条/页</option>
+                        <option :value="50">50 条/页</option>
+                        <option :value="100">100 条/页</option>
+                        <option :value="200">200 条/页</option>
+                    </select>
                 </div>
             </template>
         </div>
 
+        <!-- 单元格溢出提示 -->
+        <div class="cell-tip" v-show="tipVisible" :style="{ left: tipX + 'px', top: tipY + 'px' }"
+            @mouseenter="handleTipEnter" @mouseleave="handleTipLeave">{{ tipText }}</div>
+
         <!-- 手动新增对话框 -->
-        <el-dialog v-model="addDialogVisible" title="手动新增" width="min(90vw, 800px)" :close-on-click-modal="false">
-            <el-form ref="addFormRef" :model="addForm" label-width="100px" class="grid-form">
-                <el-form-item v-for="col in columns.filter(item => item.prop !== 'id')" :key="col.prop"
-                    :label="col.label">
-                    <el-input v-model="addForm[col.prop]" :placeholder="'请输入 ' + col.label" clearable />
-                </el-form-item>
-            </el-form>
-            <template #footer>
-                <el-button @click="addDialogVisible = false">取消</el-button>
-                <el-button type="primary" @click="confirmAdd">确定</el-button>
-            </template>
-        </el-dialog>
+        <div class="modal-overlay" :class="{ open: addDialogVisible }" @click.self="addDialogVisible = false">
+            <div class="modal-box">
+                <div class="modal-header">
+                    手动新增
+                    <button class="modal-close" @click="addDialogVisible = false">✕</button>
+                </div>
+                <div class="modal-body">
+                    <div class="form-grid">
+                        <div v-for="col in columns.filter(item => item.prop !== 'id')" :key="'form-' + col.prop" class="form-group">
+                            <label>{{ col.label }}</label>
+                            <input v-model="addForm[col.prop]" :placeholder="'请输入 ' + col.label" />
+                        </div>
+                    </div>
+                </div>
+                <div class="modal-footer">
+                    <button class="btn btn-default" @click="addDialogVisible = false">取消</button>
+                    <button class="btn btn-primary" @click="confirmAdd">确定</button>
+                </div>
+            </div>
+        </div>
 
         <!-- 操作日志对话框 -->
-        <el-dialog v-model="logDialogVisible" title="操作日志" width="700px">
-            <el-table :data="logs" max-height="460" size="small" border>
-                <el-table-column prop="time" label="时间" width="160" />
-                <el-table-column prop="action" label="操作" width="100" />
-                <el-table-column prop="detail" label="详情" min-width="200" />
-                <el-table-column label="数据变化" width="130">
-                    <template #default="{ row }">
-                        {{ row.beforeCount }} → {{ row.afterCount }} 条
-                    </template>
-                </el-table-column>
-            </el-table>
-        </el-dialog>
+        <div class="modal-overlay" :class="{ open: logDialogVisible }" @click.self="logDialogVisible = false">
+            <div class="modal-box md">
+                <div class="modal-header">
+                    操作日志
+                    <button class="modal-close" @click="logDialogVisible = false">✕</button>
+                </div>
+                <div class="modal-body" style="padding:0 24px 20px">
+                    <div class="table-scroll" style="max-height:400px">
+                        <table class="native-table log-table">
+                            <thead>
+                                <tr>
+                                    <th style="width:160px">时间</th>
+                                    <th style="width:80px">操作</th>
+                                    <th>详情</th>
+                                    <th style="width:130px">数据变化</th>
+                                </tr>
+                            </thead>
+                            <tbody>
+                                <tr v-for="row in logs" :key="row.id">
+                                    <td>{{ row.time }}</td>
+                                    <td>{{ row.action }}</td>
+                                    <td>{{ row.detail }}</td>
+                                    <td>{{ row.beforeCount }} → {{ row.afterCount }} 条</td>
+                                </tr>
+                            </tbody>
+                        </table>
+                    </div>
+                </div>
+            </div>
+        </div>
     </div>
+
+    <!-- Toast 容器 -->
+    <div id="toast-container" class="toast-container"></div>
+
     <script src="lib/vue.global.prod.js"></script>
-    <script src="lib/element-plus.umd.js"></script>
     <script src="lib/xlsx.full.min.js"></script>
     <script src="app.js"></script>
 </body>

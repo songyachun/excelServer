@@ -24,6 +24,81 @@ function loadLogs() {
 }
 function saveLogs(logs) {
     localStorage.setItem(LOG_KEY, JSON.stringify(logs));
+    // 异步保存到服务端
+    fetch('/api/logs', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(logs)
+    }).catch(() => {});
+}
+async function loadLogsFromServer() {
+    try {
+        const res = await fetch('/api/logs');
+        if (!res.ok) return null;
+        const data = await res.json();
+        if (Array.isArray(data) && data.length > 0) {
+            localStorage.setItem(LOG_KEY, JSON.stringify(data));
+            return data;
+        }
+    } catch {}
+    return null;
+}
+
+// 从表头数组生成唯一 prop 的列定义（处理重复列名）
+function makeColumns(headers) {
+    const seen = {};
+    return headers.map(k => {
+        if (!(k in seen)) seen[k] = 0;
+        seen[k]++;
+        const prop = seen[k] > 1 ? `${k}_${seen[k]}` : k;
+        return { prop, label: String(k) };
+    });
+}
+
+// -------- Toast 消息提示 --------
+let toastId = 0;
+function showToast(message, type) {
+    type = type || 'info';
+    const container = document.getElementById('toast-container');
+    if (!container) return;
+    const id = ++toastId;
+    const el = document.createElement('div');
+    el.className = `toast toast-${type}`;
+    el.id = 'toast-' + id;
+    el.textContent = message;
+    container.appendChild(el);
+    setTimeout(() => {
+        el.classList.add('toast-leave');
+        setTimeout(() => el.remove(), 250);
+    }, 3000);
+}
+function showToastSuccess(msg) { showToast(msg, 'success'); }
+function showToastWarning(msg) { showToast(msg, 'warning'); }
+function showToastInfo(msg) { showToast(msg, 'info'); }
+function showToastError(msg) { showToast(msg, 'error'); }
+
+// -------- Confirm 对话框 --------
+function showConfirm(message, title, okText, cancelText) {
+    return new Promise((resolve, reject) => {
+        const overlay = document.createElement('div');
+        overlay.className = 'modal-overlay open';
+        overlay.innerHTML = `
+            <div class="modal-box sm confirm-box">
+                <div class="modal-header">${title || '提示'}</div>
+                <div class="modal-body">
+                    <p class="confirm-msg">${message}</p>
+                </div>
+                <div class="modal-footer">
+                    <button class="btn btn-default btn-cancel">${cancelText || '取消'}</button>
+                    <button class="btn btn-primary btn-ok">${okText || '确定'}</button>
+                </div>
+            </div>
+        `;
+        document.body.appendChild(overlay);
+        overlay.querySelector('.btn-ok').onclick = () => { overlay.remove(); resolve(); };
+        overlay.querySelector('.btn-cancel').onclick = () => { overlay.remove(); reject(); };
+        overlay.onclick = (e) => { if (e.target === overlay) { overlay.remove(); reject(); } };
+    });
 }
 
 // -------- 主题系统 --------
@@ -31,8 +106,9 @@ const THEMES = [
     { id: 'warm',  name: '暖阳',  icon: '☀️' },
     { id: 'light', name: '皓月',  icon: '🌙' },
     { id: 'dark',  name: '深空',  icon: '🌌' },
+    { id: 'cyber', name: '赛博',  icon: '💠' },
 ];
-const THEME_ICONS = { warm: '☀️', light: '🌙', dark: '🌌' };
+const THEME_ICONS = { warm: '☀️', light: '🌙', dark: '🌌', cyber: '💠' };
 
 function applyTheme(themeId) {
     document.documentElement.dataset.theme = themeId;
@@ -48,15 +124,26 @@ const app = createApp({
         const isServerMode = ref(false);
         const addDialogVisible = ref(false);
         const addForm = ref({});
-        const addFormRef = ref(null);
-        const multipleTableRef = ref(null);
-        const selectedRows = ref([]);
-        const onSelectionChange = (rows) => { selectedRows.value = rows; };
+        const selectedRowIds = ref(new Set());
+        function toggleRowSelection(row) {
+            const s = new Set(selectedRowIds.value);
+            s.has(row.id) ? s.delete(row.id) : s.add(row.id);
+            selectedRowIds.value = s;
+        }
+        function toggleAllSelection() {
+            const all = pageData.value.map(r => r.id);
+            selectedRowIds.value = selectedRowIds.value.size === all.length
+                ? new Set() : new Set(all);
+        }
+        const isAllSelected = computed(() => pageData.value.length > 0 && selectedRowIds.value.size === pageData.value.length);
+        const isIndeterminate = computed(() => {
+            const s = selectedRowIds.value.size;
+            return s > 0 && s < pageData.value.length;
+        });
         const getNextId = () => {
             const maxId = tableData.value.reduce((max, r) => Math.max(max, Number(r.id) || 0), 0);
             return maxId + 1;
         };
-        const getRowKey = (row) => row.id;
 
         // -------- 操作日志 --------
         const logs = ref(loadLogs());
@@ -80,7 +167,7 @@ const app = createApp({
             const str = String(text);
             const idx = str.toLowerCase().indexOf(q.toLowerCase());
             if (idx === -1) return escapeHtml(str);
-            return escapeHtml(str.slice(0, idx)) + '<span style="background:#ffd54f;color:#1a1a1a;padding:0 2px;border-radius:2px">' + escapeHtml(str.slice(idx, idx + q.length)) + '</span>' + escapeHtml(str.slice(idx + q.length));
+            return escapeHtml(str.slice(0, idx)) + '<span class="cell-hl">' + escapeHtml(str.slice(idx, idx + q.length)) + '</span>' + escapeHtml(str.slice(idx + q.length));
         };
         function escapeHtml(s) {
             return s.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;');
@@ -105,6 +192,7 @@ const app = createApp({
             const start = (currentPage.value - 1) * pageSize.value;
             return filteredData.value.slice(start, start + pageSize.value);
         });
+        const totalPages = computed(() => Math.max(1, Math.ceil(filteredData.value.length / pageSize.value)));
 
         function resetPage() { currentPage.value = 1; }
 
@@ -139,6 +227,106 @@ const app = createApp({
                     themePanelOpen.value = false;
                 }
             }
+        }
+
+        // -------- 分页导航 ---------
+        function goPage(p) {
+            if (p < 1 || p > totalPages.value) return;
+            currentPage.value = p;
+        }
+        function pageRange() {
+            const total = totalPages.value;
+            const cur = currentPage.value;
+            if (total <= 7) return Array.from({ length: total }, (_, i) => i + 1);
+            const pages = [];
+            pages.push(1);
+            if (cur > 3) pages.push('...');
+            const start = Math.max(2, cur - 1);
+            const end = Math.min(total - 1, cur + 1);
+            for (let i = start; i <= end; i++) pages.push(i);
+            if (cur < total - 2) pages.push('...');
+            pages.push(total);
+            return pages;
+        }
+
+        // -------- 列宽调整 --------
+        const columnWidths = ref(loadColumnWidths());
+        function loadColumnWidths() {
+            try { return JSON.parse(localStorage.getItem('excel_column_widths')) || {}; } catch { return {}; }
+        }
+        function saveColumnWidths() {
+            try { localStorage.setItem('excel_column_widths', JSON.stringify(columnWidths.value)); } catch {}
+        }
+        function colWidthStyle(prop) {
+            const w = columnWidths.value[prop];
+            return w ? { width: w + 'px', minWidth: '120px' } : {};
+        }
+        const resizing = ref(null);
+        function startResize(e, prop) {
+            const th = e.target.closest('th');
+            if (!th) return;
+            resizing.value = { prop, startX: e.clientX, startWidth: th.offsetWidth };
+            document.addEventListener('mousemove', onResize);
+            document.addEventListener('mouseup', stopResize);
+            document.body.style.cursor = 'col-resize';
+            document.body.style.userSelect = 'none';
+            e.preventDefault();
+        }
+        function onResize(e) {
+            if (!resizing.value) return;
+            const diff = e.clientX - resizing.value.startX;
+            const newWidth = Math.max(80, resizing.value.startWidth + diff);
+            columnWidths.value = { ...columnWidths.value, [resizing.value.prop]: newWidth };
+        }
+        function stopResize() {
+            if (resizing.value) {
+                saveColumnWidths();
+                resizing.value = null;
+            }
+            document.removeEventListener('mousemove', onResize);
+            document.removeEventListener('mouseup', stopResize);
+            document.body.style.cursor = '';
+            document.body.style.userSelect = '';
+        }
+
+        // -------- 单元格溢出提示（只有鼠标离开单元格和提示框两者才隐藏） --------
+        const tipVisible = ref(false);
+        const tipText = ref('');
+        const tipX = ref(0);
+        const tipY = ref(0);
+        let tipTimer = null;
+        let inCell = false;  // 鼠标在触发提示的单元格内
+        let inTip = false;   // 鼠标在提示框内
+        const TIP_DELAY = 200;
+        function tipCheckHide() {
+            if (!inCell && !inTip) {
+                tipTimer = setTimeout(() => { tipVisible.value = false; }, TIP_DELAY);
+            }
+        }
+        function handleCellEnter(e, row, col) {
+            inCell = true;
+            const td = e.currentTarget;
+            if (td.scrollWidth <= td.clientWidth) return;
+            const rect = td.getBoundingClientRect();
+            tipText.value = row[col.prop] != null ? String(row[col.prop]) : '';
+            tipX.value = rect.left;
+            tipY.value = rect.top;
+            clearTimeout(tipTimer);
+            tipTimer = setTimeout(() => { tipVisible.value = true; }, TIP_DELAY);
+        }
+        function handleCellLeave() {
+            inCell = false;
+            clearTimeout(tipTimer);
+            tipCheckHide();
+        }
+        function handleTipEnter() {
+            inTip = true;
+            clearTimeout(tipTimer);
+        }
+        function handleTipLeave() {
+            inTip = false;
+            clearTimeout(tipTimer);
+            tipCheckHide();
         }
 
         // -------- 解析 Excel --------
@@ -178,7 +366,7 @@ const app = createApp({
                 const payload = await res.json();
                 const data = payload.data || payload;
                 if (!Array.isArray(data) || data.length === 0) return false;
-                columns.value = Object.keys(data[0]).map(k => ({ prop: k, label: k }));
+                columns.value = makeColumns(Object.keys(data[0]));
                 tableData.value = data;
                 sheetName.value = payload.sheetName || 'data';
                 isServerMode.value = true;
@@ -229,30 +417,25 @@ const app = createApp({
                 // 回退到 localStorage
                 const stored = loadFromStorage();
                 if (stored && stored.data && stored.data.length) {
-                    columns.value = Object.keys(stored.data[0]).map(k => ({ prop: k, label: k }));
+                    columns.value = makeColumns(Object.keys(stored.data[0]));
                     tableData.value = stored.data;
                     sheetName.value = stored.sheetName || '';
                 }
             }
+            // 从服务端加载操作日志
+            const serverLogs = await loadLogsFromServer();
+            if (serverLogs) logs.value = serverLogs;
         });
         // -------- 事件处理 --------
-        const handleFileChange = async (uploadFile) => {
-            const file = uploadFile.raw;
+        const handleFileInput = async (e) => {
+            const file = e.target.files && e.target.files[0];
             if (!file) return;
 
             // 存在数据时询问追加或替换
             let mode = 'replace';
             if (tableData.value.length > 0) {
                 try {
-                    const action = await ElementPlus.ElMessageBox.confirm(
-                        '当前已有数据，请选择导入方式：',
-                        '导入确认',
-                        {
-                            confirmButtonText: '追加',
-                            cancelButtonText: '替换',
-                            type: 'info',
-                        }
-                    );
+                    await showConfirm('当前已有数据，请选择导入方式：', '导入确认', '追加', '替换');
                     mode = 'append';
                 } catch {
                     mode = 'replace';
@@ -260,16 +443,16 @@ const app = createApp({
             }
 
             const reader = new FileReader();
-            reader.onload = async (e) => {
+            reader.onload = async (ev) => {
                 try {
-                    const data = new Uint8Array(e.target.result);
+                    const data = new Uint8Array(ev.target.result);
                     const workbook = XLSX.read(data, { type: 'array' });
                     const name = workbook.SheetNames[0];
                     const worksheet = workbook.Sheets[name];
                     const jsonData = parseExcel(worksheet);
 
                     if (jsonData.length === 0) {
-                        ElementPlus.ElMessage.warning('未识别到有效数据');
+                        showToastWarning('未识别到有效数据');
                         return;
                     }
 
@@ -284,14 +467,14 @@ const app = createApp({
                         );
                         addedCount = newRows.length;
                         if (addedCount === 0) {
-                            ElementPlus.ElMessage.info('所有数据均已存在，无需追加');
+                            showToastInfo('所有数据均已存在，无需追加');
                             return;
                         }
                         let nextId = getNextId();
                         const newRowsWithId = newRows.map(row => ({ ...row, id: nextId++ }));
                         tableData.value = [...existing, ...newRowsWithId];
                     } else {
-                        columns.value = [{ prop: 'id', label: 'ID' }, ...Object.keys(jsonData[0]).map(k => ({ prop: k, label: k }))];
+                        columns.value = [{ prop: 'id', label: 'ID' }, ...makeColumns(Object.keys(jsonData[0]))];
                         const dataWithId = jsonData.map((row, idx) => ({ ...row, id: idx + 1 }));
                         tableData.value = dataWithId;
                         sheetName.value = name;
@@ -304,12 +487,14 @@ const app = createApp({
                     saveToStorage(tableData.value, sheetName.value || name);
 
                     addLog(mode === 'append' ? '追加导入' : '导入', `文件: ${file.name}, ${addedCount} 条`, beforeCount);
-                    ElementPlus.ElMessage.success(`成功导入 ${addedCount} 条记录`);
+                    showToastSuccess(`成功导入 ${addedCount} 条记录`);
                 } catch (err) {
-                    ElementPlus.ElMessage.error('文件解析失败：' + err.message);
+                    showToastError('文件解析失败：' + err.message);
                 }
             };
             reader.readAsArrayBuffer(file);
+            // 重置 input 以便重复选择同一文件
+            e.target.value = '';
         };
 
         const showAddDialog = () => {
@@ -322,7 +507,7 @@ const app = createApp({
         const confirmAdd = async () => {
             const hasValue = Object.values(addForm.value).some(v => v !== '' && v !== null && v !== undefined);
             if (!hasValue) {
-                ElementPlus.ElMessage.warning('请至少填写一个字段');
+                showToastWarning('请至少填写一个字段');
                 return;
             }
             const beforeCount = tableData.value.length;
@@ -333,27 +518,23 @@ const app = createApp({
             await saveToServer(tableData.value, sheetName.value);
             saveToStorage(tableData.value, sheetName.value);
             addLog('新增', '手动新增 1 条', beforeCount);
-            ElementPlus.ElMessage.success('已新增 1 条记录');
+            showToastSuccess('已新增 1 条记录');
         };
 
         const deleteSelected = async () => {
             const beforeCount = tableData.value.length;
-            const ids = new Set(selectedRows.value.map(r => r.id));
+            const ids = selectedRowIds.value;
             tableData.value = tableData.value.filter(r => !ids.has(r.id));
-            selectedRows.value = [];
+            selectedRowIds.value = new Set();
             await saveToServer(tableData.value, sheetName.value);
             saveToStorage(tableData.value, sheetName.value);
             addLog('删除', `删除 ${beforeCount - tableData.value.length} 条`, beforeCount);
-            ElementPlus.ElMessage.success('已删除选中数据');
+            showToastSuccess('已删除选中数据');
         };
 
         const clearData = async () => {
             try {
-                await ElementPlus.ElMessageBox.confirm(
-                    '确定要全部清空数据吗？此操作不可恢复。',
-                    '清空数据',
-                    { confirmButtonText: '确定', cancelButtonText: '取消', type: 'warning' }
-                );
+                await showConfirm('确定要全部清空数据吗？此操作不可恢复。', '清空数据');
             } catch {
                 return;
             }
@@ -366,21 +547,27 @@ const app = createApp({
             clearServerData();
             resetPage();
             addLog('清空', `清空全部 ${beforeCount} 条数据`, beforeCount);
-            ElementPlus.ElMessage.info('数据已清空');
+            showToastInfo('数据已清空');
         };
 
         return {
             tableData, columns, sheetName, searchQuery, filteredData, pageData,
-            currentPage, pageSize, isServerMode, tableHeight,
-            handleFileChange, clearData,
-            addDialogVisible, addForm, addFormRef, showAddDialog, confirmAdd,
-            multipleTableRef, selectedRows, onSelectionChange, deleteSelected,
-            getRowKey, highlightText, logs, logDialogVisible,
+            currentPage, pageSize, totalPages, isServerMode, tableHeight,
+            handleFileInput, clearData,
+            addDialogVisible, addForm, showAddDialog, confirmAdd,
+            deleteSelected, highlightText, logs, logDialogVisible,
+            selectedRowIds, toggleRowSelection, toggleAllSelection, isAllSelected, isIndeterminate,
             themes, currentTheme, themeIcon, themePanelOpen, themeBtnRef,
-            setTheme, toggleThemePanel,
+            setTheme, toggleThemePanel, goPage, pageRange,
+            columnWidths, colWidthStyle, startResize,
+            tipVisible, tipText, tipX, tipY, handleCellEnter, handleCellLeave, handleTipEnter, handleTipLeave,
         };
     }
 });
 
-app.use(ElementPlus);
+app.directive('indeterminate', {
+    mounted(el, binding) { el.indeterminate = binding.value; },
+    updated(el, binding) { el.indeterminate = binding.value; }
+});
+
 app.mount('#app');

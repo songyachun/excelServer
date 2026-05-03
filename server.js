@@ -5,6 +5,7 @@ const path = require('path');
 const PORT = parseInt(process.argv[2], 10) || 3000;
 const DATA_DIR = path.join(__dirname, 'data');
 const DATA_FILE = path.join(DATA_DIR, 'data.json');
+const LOGS_FILE = path.join(DATA_DIR, 'logs.json');
 
 // 确保 data 目录存在
 if (!fs.existsSync(DATA_DIR)) fs.mkdirSync(DATA_DIR, { recursive: true });
@@ -85,6 +86,23 @@ const server = http.createServer(async (req, res) => {
                 fs.copyFileSync(DATA_FILE, backupFile);
                 fs.unlinkSync(DATA_FILE);
             }
+            res.writeHead(200, { 'Content-Type': 'application/json' });
+            return res.end(JSON.stringify({ ok: true }));
+        }
+
+        // API: 读取日志
+        if (pathname === '/api/logs' && req.method === 'GET') {
+            if (fs.existsSync(LOGS_FILE)) {
+                return res.end(fs.readFileSync(LOGS_FILE, 'utf-8'));
+            }
+            res.writeHead(200, { 'Content-Type': 'application/json' });
+            return res.end('[]');
+        }
+
+        // API: 保存日志
+        if (pathname === '/api/logs' && req.method === 'POST') {
+            const body = await parseBody(req);
+            fs.writeFileSync(LOGS_FILE, JSON.stringify(body, null, 2), 'utf-8');
             res.writeHead(200, { 'Content-Type': 'application/json' });
             return res.end(JSON.stringify({ ok: true }));
         }
